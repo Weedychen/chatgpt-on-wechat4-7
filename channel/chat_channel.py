@@ -97,7 +97,7 @@ class ChatChannel(Channel):
                         logger.info("[WX]receive group voice, but checkprefix didn't match")
                     return None
             else: # 单聊
-                match_prefix = check_prefix(content, conf().get('single_chat_prefix'))  
+                match_prefix = check_prefix(content, conf().get('single_chat_prefix',['']))
                 if match_prefix is not None: # 判断如果匹配到自定义前缀，则返回过滤掉前缀+空格后的内容
                     content = content.replace(match_prefix, '', 1).strip()
                 elif context["origin_ctype"] == ContextType.VOICE: # 如果源消息是私聊的语音消息，允许不匹配前缀，放宽条件
@@ -170,6 +170,8 @@ class ChatChannel(Channel):
                         reply = self._generate_reply(new_context)
                     else:
                         return
+            elif context.type == ContextType.IMAGE:  # 图片消息，当前无默认逻辑
+                pass
             else:
                 logger.error('[WX] unknown context type: {}'.format(context.type))
                 return
@@ -231,6 +233,9 @@ class ChatChannel(Channel):
                 time.sleep(3+3*retry_cnt)
                 self._send(reply, context, retry_cnt+1)
 
+    def _success_callback(self, session_id, **kwargs):# 线程正常结束时的回调函数
+        logger.debug("Worker return success, session_id = {}".format(session_id))
+
     def _fail_callback(self, session_id, exception, **kwargs): # 线程异常结束时的回调函数
         logger.exception("Worker return exception: {}".format(exception))
 
@@ -240,6 +245,8 @@ class ChatChannel(Channel):
                 worker_exception = worker.exception()
                 if worker_exception:
                     self._fail_callback(session_id, exception = worker_exception, **kwargs)
+                else:
+                    self._success_callback(session_id, **kwargs)
             except CancelledError as e:
                 logger.info("Worker cancelled, session_id = {}".format(session_id))
             except Exception as e:
@@ -252,7 +259,7 @@ class ChatChannel(Channel):
         session_id = context['session_id']
         with self.lock:
             if session_id not in self.sessions:
-                self.sessions[session_id] = [Dequeue(), threading.BoundedSemaphore(conf().get("concurrency_in_session", 1))]
+                self.sessions[session_id] = [Dequeue(), threading.BoundedSemaphore(conf().get("concurrency_in_session", 4))]
             if context.type == ContextType.TEXT and context.content.startswith("#"): 
                 self.sessions[session_id][0].putleft(context) # 优先处理管理命令
             else:
@@ -305,6 +312,8 @@ class ChatChannel(Channel):
     
 
 def check_prefix(content, prefix_list):
+    if not prefix_list:
+        return None
     for prefix in prefix_list:
         if content.startswith(prefix):
             return prefix
